@@ -135,19 +135,18 @@ class Model(nn.Module):
             else:
                 topk, indices = torch.topk(l2_new, excite)
                 topk, indices = topk.to(device), indices.to(device)
-                topk.data = torch.ones(shape, l2_new.size()[1]).to(device)
                 res = torch.zeros(l2_new.size()).to(device)
-                l2_new.data = res.scatter(1, indices, topk).data
+                l2_new = res.scatter(1, indices, topk)
 
-            # if number of active new neurons is greater than active mature
+            # if number of active new neurons is greater than proportion
+            # of all neurons to be active,
             # then all mature neurons set to 0
             if excite > self.layer_k[0]:
-                l2_old.data = torch.zeros(l2_old.size()).to(device)
+                l2_old = torch.zeros(l2_old.size()).to(device)
             else:
                 topk, indices = torch.topk(l2_old, self.layer_k[0])
-                topk.data = torch.ones(shape, l2_old.size()[1]).to(device)
                 res = torch.zeros(l2_old.size()).to(device)
-                l2_old.data = res.scatter(1, indices, topk).data
+                l2_old = res.scatter(1, indices, topk)
 
             if shape == self.n_train:
                 res = [self.res_train1, self.res_train2]
@@ -157,8 +156,7 @@ class Model(nn.Module):
             # get the input to CA3/RNN
             l3 = self.sig(self.w2(l2_old)) + self.sig(self.w2_new(l2_new))
             topk, indices = torch.topk(l3, self.layer_k[1])
-            topk.data = torch.ones(shape, self.layer_size[2]).to(device)
-            l3.data = res[1].scatter(1, indices, topk).data
+            l3 = res[1].scatter(1, indices, topk)
 
         else:  # if no new neurons have been added
             if shape == self.n_train:
@@ -170,14 +168,12 @@ class Model(nn.Module):
             l2 = self.sig(self.w1(x))
             topk, indices = torch.topk(l2, self.layer_k[0])
             topk, indices = topk.to(device), indices.to(device)
-            topk.data = torch.ones(shape, self.layer_size[1]).to(device)
-            l2.data = res[0].scatter(1, indices, topk).data
+            l2 = res[0].scatter(1, indices, topk)
 
             l3 = self.sig(self.w2(l2))
             topk, indices = torch.topk(l3, self.layer_k[1])
             topk, indices = topk.to(device), indices.to(device)
-            topk.data = torch.ones(shape, self.layer_size[2]).to(device)
-            l3.data = res[1].scatter(1, indices, topk).data
+            l3 = res[1].scatter(1, indices, topk)
 
         # ca3 recurrency
         state = self.rnn.init_hidden(shape)
@@ -185,8 +181,7 @@ class Model(nn.Module):
             state = self.rnn(l3, state)
         topk, indices = torch.topk(state, self.layer_k[1])
         topk, indices = topk.to(device), indices.to(device)
-        topk.data = torch.ones(shape, self.layer_size[2]).to(device)
-        state.data = res[1].scatter(1, indices, topk).data
+        state = res[1].scatter(1, indices, topk)
 
         return state
 
@@ -441,6 +436,8 @@ class Model(nn.Module):
             res = [self.res_train1, self.res_train2]
 
         output = self.forward(patterns[0][stage], N)
+        indices = torch.nonzero(output, as_tuple=False)
+        output = res[stage].scatter(1, indices, 1)
         l3_loss = (output - patterns[1][stage]).abs().sum()
         hamming_loss = l3_loss.data.cpu().numpy()/N
 
