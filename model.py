@@ -60,11 +60,6 @@ class Model(nn.Module):
                         layer_sparsity[1:] * np.array([layer_size[1],
                                                       layer_size[2]])]
 
-        # a shell array for KWTA using topk()
-        self.res_train1 = Variable(torch.zeros([n_train, layer_size[1]])).to(device)
-        self.res_train2 = Variable(torch.zeros([n_train, layer_size[2]])).to(device)
-        self.res_test1 = Variable(torch.zeros([n_test, layer_size[1]])).to(device)
-        self.res_test2 = Variable(torch.zeros([n_test, layer_size[2]])).to(device)
 
         # get the number (for topk) of active neurons for each
         # layer based on the proportion
@@ -79,7 +74,7 @@ class Model(nn.Module):
         self.w1 = nn.Linear(layer_size[0], layer_size[1])
         self.w2 = nn.Linear(layer_size[1], layer_size[2])
         nn.init.xavier_uniform_(self.w1.weight)
-        nn.init.xavier_uniform_(self.w2.weight))
+        nn.init.xavier_uniform_(self.w2.weight)
 
         # recurrent weights are generated as a normal distribution scaled
         # by the synaptic sparsity of the recurrent layer
@@ -108,6 +103,12 @@ class Model(nn.Module):
         self.n_train = len(self.train[0])
         self.n_test = len(self.test[0])
 
+        # a shell array for KWTA using topk()
+        self.res_train1 = Variable(torch.zeros([self.n_train, layer_size[1]])).to(device)
+        self.res_train2 = Variable(torch.zeros([self.n_train, layer_size[2]])).to(device)
+        self.res_test1 = Variable(torch.zeros([self.n_test, layer_size[1]])).to(device)
+        self.res_test2 = Variable(torch.zeros([self.n_test, layer_size[2]])).to(device)
+
         # create the sparse masks
         self.w1_sp = Variable(torch.from_numpy(self.masks[0]).type(self.dtype),
                               requires_grad=False).to(device)
@@ -124,16 +125,17 @@ class Model(nn.Module):
             l2_old, l2_new = torch.split(l2, [self.layer_size[1]-self.new,
                                               self.new], dim=1)
 
-            excite = int(self.excite*self.new)
+            k_excite = int(self.excite*self.new)
 
             # excite requires a certain number of new neurons to be active
             # if no active new neurons, then continue as usual
-            if (excite == 0) or (self.new_syn_n[0] == 0):
+            if (k_excite == 0) or (self.new_syn_n[0] == 0):
                 l2_new = torch.zeros(l2_new.size()).to(device)
-                # if no input connections but excite > 0
-                excite = 0
+                # if no input connections but k_excite > 0
+                k_excite = 0
             else:
-                topk, indices = torch.topk(l2_new, excite)
+                # take the top K
+                topk, indices = torch.topk(l2_new, k_excite)
                 topk, indices = topk.to(device), indices.to(device)
                 res = torch.zeros(l2_new.size()).to(device)
                 l2_new = res.scatter(1, indices, topk)
@@ -141,7 +143,7 @@ class Model(nn.Module):
             # if number of active new neurons is greater than proportion
             # of all neurons to be active,
             # then all mature neurons set to 0
-            if excite > self.layer_k[0]:
+            if k_excite > self.layer_k[0]:
                 l2_old = torch.zeros(l2_old.size()).to(device)
             else:
                 topk, indices = torch.topk(l2_old, self.layer_k[0])
@@ -203,8 +205,6 @@ class Model(nn.Module):
             logger[0] = self.accuracy(generalize=generalize)
 
         assert stage in [0, 1]
-
-        ntrain = len(self.train[0][stage])
 
         for epoch in range(epochs):
             self.training = True
@@ -435,9 +435,10 @@ class Model(nn.Module):
             N = self.n_train
             res = [self.res_train1, self.res_train2]
 
+        # set all non-zero indices to 1
         output = self.forward(patterns[0][stage], N)
         indices = torch.nonzero(output, as_tuple=False)
-        output = res[stage].scatter(1, indices, 1)
+        output = res[stage].scatter(1, indices, 1) 
         l3_loss = (output - patterns[1][stage]).abs().sum()
         hamming_loss = l3_loss.data.cpu().numpy()/N
 
@@ -445,7 +446,8 @@ class Model(nn.Module):
 
     def accuracy(self, generalize=True, training_off=False, valid=False):
         '''
-        Measure accuracy of network.
+        Measure accuracy of network on both learning stage 0 and 1 by 
+        converting hamming loss.
 
         Input
         ====
